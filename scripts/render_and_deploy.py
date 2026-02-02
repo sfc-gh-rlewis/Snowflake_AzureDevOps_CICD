@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """
 Render Jinja templates and deploy SQL to Snowflake.
-Usage: python render_and_deploy.py <ENVIRONMENT>
-Example: python render_and_deploy.py PROD
+Usage: python render_and_deploy.py <ENVIRONMENT> [--connection <name>]
+Example: python render_and_deploy.py PROD --connection myconn
 """
 
 import os
 import sys
 import glob
 import yaml
+import argparse
 from jinja2 import Template
 import subprocess
+
+CONNECTION = 'default'
 
 def load_config(env: str) -> dict:
     """Load configuration from manifest.yml for specified environment."""
@@ -44,7 +47,7 @@ def execute_sql(sql: str, description: str = ""):
         
         try:
             result = subprocess.run(
-                ['snow', 'sql', '-q', stmt, '-c', 'default'],
+                ['snow', 'sql', '-q', stmt, '-c', CONNECTION],
                 capture_output=True,
                 text=True,
                 timeout=120
@@ -59,14 +62,18 @@ def execute_sql(sql: str, description: str = ""):
             print(f"  WARNING: {e}")
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python render_and_deploy.py <ENVIRONMENT>")
-        print("Example: python render_and_deploy.py PROD")
-        sys.exit(1)
+    global CONNECTION
     
-    env = sys.argv[1].upper()
+    parser = argparse.ArgumentParser(description='Render Jinja templates and deploy SQL to Snowflake')
+    parser.add_argument('environment', help='Target environment (DEV or PROD)')
+    parser.add_argument('-c', '--connection', default='default', help='Snow CLI connection name')
+    args = parser.parse_args()
+    
+    env = args.environment.upper()
+    CONNECTION = args.connection
+    
     print(f"\n{'#'*60}")
-    print(f"# Deploying to {env}")
+    print(f"# Deploying to {env} (connection: {CONNECTION})")
     print(f"{'#'*60}")
     
     config = load_config(env)
