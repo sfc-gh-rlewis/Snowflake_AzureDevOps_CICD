@@ -43,7 +43,7 @@ stages:
           - script: |
               mkdir -p ~/.snowflake
               cat > ~/.snowflake/connections.toml << 'EOF'
-              [default]
+              [cicd]
               account = "$(SNOWFLAKE_ACCOUNT)"
               user = "$(SNOWFLAKE_USER)"
               password = "$(SNOWFLAKE_PASSWORD)"
@@ -67,7 +67,7 @@ stages:
             displayName: 'Validate SQL Files Exist'
 
           - script: |
-              snow sql -q "SELECT CURRENT_ACCOUNT(), CURRENT_USER(), CURRENT_ROLE()" -c default
+              snow sql -q "SELECT CURRENT_ACCOUNT(), CURRENT_USER(), CURRENT_ROLE()" -c cicd
             displayName: 'Test Snowflake Connection'
 
   - stage: Deploy_DEV
@@ -89,7 +89,7 @@ stages:
           - script: |
               mkdir -p ~/.snowflake
               cat > ~/.snowflake/connections.toml << 'EOF'
-              [default]
+              [cicd]
               account = "$(SNOWFLAKE_ACCOUNT)"
               user = "$(SNOWFLAKE_USER)"
               password = "$(SNOWFLAKE_PASSWORD)"
@@ -102,7 +102,7 @@ stages:
               SNOWFLAKE_PASSWORD: $(SNOWFLAKE_PASSWORD)
 
           - script: |
-              python3 scripts/render_and_deploy.py DEV
+              python3 scripts/render_and_deploy.py DEV -c cicd
             displayName: 'Deploy to DEV'
 
   - stage: Deploy_PROD
@@ -130,7 +130,7 @@ stages:
                 - script: |
                     mkdir -p ~/.snowflake
                     cat > ~/.snowflake/connections.toml << 'EOF'
-                    [default]
+                    [cicd]
                     account = "$(SNOWFLAKE_ACCOUNT)"
                     user = "$(SNOWFLAKE_USER)"
                     password = "$(SNOWFLAKE_PASSWORD)"
@@ -143,7 +143,7 @@ stages:
                     SNOWFLAKE_PASSWORD: $(SNOWFLAKE_PASSWORD)
 
                 - script: |
-                    python3 scripts/render_and_deploy.py PROD
+                    python3 scripts/render_and_deploy.py PROD -c cicd
                   displayName: 'Deploy to PROD'
 
                 - script: |
