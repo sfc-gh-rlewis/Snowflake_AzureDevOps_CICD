@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Output directories
+out/
+.out/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Snowflake
+.snowflake/
+
+# Sensitive files
+*.pem
+*.key
+secrets.yml
+*.eml

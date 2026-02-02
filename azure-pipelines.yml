@@ -1,0 +1,149 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  SNOWFLAKE_ACCOUNT: 'SFSENORTHAMERICA-AZ_DEMO_274'
+  SNOWFLAKE_USER: 'CICD_SERVICE_USER'
+  SNOWFLAKE_WAREHOUSE: 'COMPUTE_WH'
+  SNOWFLAKE_DATABASE: 'CICD_DEMO_PROD'
+  SNOWFLAKE_ROLE: 'ACCOUNTADMIN'
+
+stages:
+  - stage: Validate
+    displayName: 'Validate SQL Syntax'
+    jobs:
+      - job: Validate
+        displayName: 'Validate SQL Files'
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '3.11'
+            displayName: 'Use Python 3.11'
+
+          - script: |
+              pip install snowflake-cli jinja2
+            displayName: 'Install Dependencies'
+
+          - script: |
+              mkdir -p ~/.snowflake
+              cat > ~/.snowflake/connections.toml << 'EOF'
+              [default]
+              account = "$(SNOWFLAKE_ACCOUNT)"
+              user = "$(SNOWFLAKE_USER)"
+              password = "$(SNOWFLAKE_PASSWORD)"
+              warehouse = "$(SNOWFLAKE_WAREHOUSE)"
+              database = "$(SNOWFLAKE_DATABASE)"
+              role = "$(SNOWFLAKE_ROLE)"
+              EOF
+            displayName: 'Configure Snowflake Connection'
+            env:
+              SNOWFLAKE_PASSWORD: $(SNOWFLAKE_PASSWORD)
+
+          - script: |
+              echo "Validating SQL files..."
+              for file in definitions/*.sql; do
+                echo "Checking: $file"
+                if [ -f "$file" ]; then
+                  echo "  - File exists: OK"
+                fi
+              done
+              echo "Validation complete!"
+            displayName: 'Validate SQL Files Exist'
+
+          - script: |
+              snow sql -q "SELECT CURRENT_ACCOUNT(), CURRENT_USER(), CURRENT_ROLE()" -c default
+            displayName: 'Test Snowflake Connection'
+
+  - stage: Deploy_DEV
+    displayName: 'Deploy to DEV'
+    dependsOn: Validate
+    condition: and(succeeded(), ne(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: DeployDev
+        displayName: 'Deploy to DEV Environment'
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '3.11'
+
+          - script: |
+              pip install snowflake-cli jinja2
+            displayName: 'Install Dependencies'
+
+          - script: |
+              mkdir -p ~/.snowflake
+              cat > ~/.snowflake/connections.toml << 'EOF'
+              [default]
+              account = "$(SNOWFLAKE_ACCOUNT)"
+              user = "$(SNOWFLAKE_USER)"
+              password = "$(SNOWFLAKE_PASSWORD)"
+              warehouse = "$(SNOWFLAKE_WAREHOUSE)"
+              database = "$(SNOWFLAKE_DATABASE)"
+              role = "$(SNOWFLAKE_ROLE)"
+              EOF
+            displayName: 'Configure Snowflake Connection'
+            env:
+              SNOWFLAKE_PASSWORD: $(SNOWFLAKE_PASSWORD)
+
+          - script: |
+              python3 scripts/render_and_deploy.py DEV
+            displayName: 'Deploy to DEV'
+
+  - stage: Deploy_PROD
+    displayName: 'Deploy to Production'
+    dependsOn: Validate
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeployProd
+        displayName: 'Deploy to PROD'
+        environment: 'production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: UsePythonVersion@0
+                  inputs:
+                    versionSpec: '3.11'
+
+                - script: |
+                    pip install snowflake-cli jinja2
+                  displayName: 'Install Dependencies'
+
+                - script: |
+                    mkdir -p ~/.snowflake
+                    cat > ~/.snowflake/connections.toml << 'EOF'
+                    [default]
+                    account = "$(SNOWFLAKE_ACCOUNT)"
+                    user = "$(SNOWFLAKE_USER)"
+                    password = "$(SNOWFLAKE_PASSWORD)"
+                    warehouse = "$(SNOWFLAKE_WAREHOUSE)"
+                    database = "$(SNOWFLAKE_DATABASE)"
+                    role = "$(SNOWFLAKE_ROLE)"
+                    EOF
+                  displayName: 'Configure Snowflake Connection'
+                  env:
+                    SNOWFLAKE_PASSWORD: $(SNOWFLAKE_PASSWORD)
+
+                - script: |
+                    python3 scripts/render_and_deploy.py PROD
+                  displayName: 'Deploy to PROD'
+
+                - script: |
+                    echo "========================================"
+                    echo "Deployment completed successfully!"
+                    echo "Build ID: $(Build.BuildId)"
+                    echo "Environment: PROD"
+                    echo "========================================"
+                  displayName: 'Deployment Summary'

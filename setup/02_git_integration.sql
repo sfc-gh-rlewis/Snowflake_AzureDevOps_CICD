@@ -1,0 +1,30 @@
+-- Git Integration Setup for Azure DevOps
+-- Replace <YOUR_PAT_TOKEN> with your actual Personal Access Token
+
+-- Step 1: Create secret for Azure DevOps PAT
+CREATE OR REPLACE SECRET CICD_DEMO_PROD.PUBLIC.AZURE_DEVOPS_PAT
+    TYPE = PASSWORD
+    USERNAME = 'reidlewis'
+    PASSWORD = '<YOUR_PAT_TOKEN>';
+
+-- Step 2: Create API integration for Azure DevOps
+CREATE OR REPLACE API INTEGRATION AZURE_DEVOPS_GIT_INTEGRATION
+    API_PROVIDER = git_https_api
+    API_ALLOWED_PREFIXES = ('https://dev.azure.com/reidlewis')
+    ALLOWED_AUTHENTICATION_SECRETS = (CICD_DEMO_PROD.PUBLIC.AZURE_DEVOPS_PAT)
+    ENABLED = TRUE;
+
+-- Step 3: Create Git repository connection
+CREATE OR REPLACE GIT REPOSITORY CICD_DEMO_PROD.PUBLIC.SNOWFLAKE_DEVOPS_REPO
+    API_INTEGRATION = AZURE_DEVOPS_GIT_INTEGRATION
+    GIT_CREDENTIALS = CICD_DEMO_PROD.PUBLIC.AZURE_DEVOPS_PAT
+    ORIGIN = 'https://dev.azure.com/reidlewis/Snowflake_DevOps_Demo/_git/Snowflake_DevOps_Demo';
+
+-- Step 4: Verify the repository connection
+SHOW GIT REPOSITORIES IN SCHEMA CICD_DEMO_PROD.PUBLIC;
+
+-- Step 5: Fetch latest from remote (sync)
+ALTER GIT REPOSITORY CICD_DEMO_PROD.PUBLIC.SNOWFLAKE_DEVOPS_REPO FETCH;
+
+-- Step 6: List branches
+SHOW GIT BRANCHES IN CICD_DEMO_PROD.PUBLIC.SNOWFLAKE_DEVOPS_REPO;
