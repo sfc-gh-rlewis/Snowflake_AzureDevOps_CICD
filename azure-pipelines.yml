@@ -31,13 +31,8 @@ stages:
       - job: Validate
         displayName: 'Validate SQL Files'
         steps:
-          - task: UsePythonVersion@0
-            inputs:
-              versionSpec: '3.11'
-            displayName: 'Use Python 3.11'
-
           - script: |
-              pip install snowflake-cli jinja2
+              pip3 install --user snowflake-cli jinja2
             displayName: 'Install Dependencies'
 
           - script: |
@@ -79,12 +74,8 @@ stages:
       - job: DeployDev
         displayName: 'Deploy to DEV Environment'
         steps:
-          - task: UsePythonVersion@0
-            inputs:
-              versionSpec: '3.11'
-
           - script: |
-              pip install snowflake-cli jinja2
+              pip3 install --user snowflake-cli jinja2
             displayName: 'Install Dependencies'
 
           - script: |
@@ -121,12 +112,8 @@ stages:
               steps:
                 - checkout: self
 
-                - task: UsePythonVersion@0
-                  inputs:
-                    versionSpec: '3.11'
-
                 - script: |
-                    pip install snowflake-cli jinja2
+                    pip3 install --user snowflake-cli jinja2
                   displayName: 'Install Dependencies'
 
                 - script: |
