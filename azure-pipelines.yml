@@ -1,21 +1,26 @@
 # =============================================================================
 # Azure DevOps CI/CD Pipeline for Snowflake
 # =============================================================================
-# This pipeline automates the deployment of Snowflake objects (tables, views,
-# dynamic tables, etc.) across DEV and PROD environments.
+# This pipeline automates deployment of Snowflake objects using snow git execute,
+# which runs SQL directly from a Git repository connected to Snowflake.
 #
 # WORKFLOW:
-#   - Feature branches → Deploy to DEV (automatic)
-#   - Merge to main    → Deploy to PROD (requires approval)
-#   - Manual trigger   → Reset DEV from PROD (zero-copy clone)
+#   - Feature branches -> Deploy to DEV (automatic)
+#   - Merge to main    -> Deploy to PROD (requires approval)
+#   - Manual trigger   -> Reset DEV from PROD (zero-copy clone)
+#
+# HOW IT WORKS:
+#   1. Azure DevOps is the source of truth (remote Git repository)
+#   2. Snowflake has a clone of the repo (SNOWFLAKE_DEVOPS_REPO)
+#   3. snow git fetch syncs Snowflake's clone with Azure DevOps
+#   4. snow git execute runs SQL files with Jinja templating
 #
 # AUTHENTICATION:
-#   Uses RSA key pair authentication via a service user (CICD_SERVICE_USER).
-#   The private key is stored base64-encoded in the SNOWFLAKE_PRIVATE_KEY
-#   variable group to preserve newlines.
+#   Uses RSA key pair authentication via a service user.
+#   The private key is stored base64-encoded in the variable group.
 # =============================================================================
 
-# Trigger on pushes to any branch, but only when SQL definitions or scripts change
+# Trigger on pushes to any branch, but only when SQL definitions change
 trigger:
   branches:
     include:
@@ -23,7 +28,6 @@ trigger:
   paths:
     include:
       - definitions/*
-      - scripts/*
 
 # Trigger on pull requests targeting main branch
 pr:
@@ -31,7 +35,7 @@ pr:
     include:
       - main
 
-# Runtime parameters - these appear as options when manually running the pipeline
+# Runtime parameters - appear as options when manually running the pipeline
 parameters:
 - name: RESET_DEV
   displayName: 'Reset DEV from PROD?'
@@ -39,38 +43,38 @@ parameters:
   default: false
 
 # Use self-hosted agent to bypass network policy IP restrictions
-# Microsoft-hosted agents have dynamic IPs that can't be allowlisted
 pool:
   name: 'Default'
 
 # =============================================================================
-# Variables
+# Variables - All stored in Azure DevOps variable group
 # =============================================================================
-# SNOWFLAKE_PRIVATE_KEY is stored in a variable group (base64-encoded)
-# Other connection details are defined inline
 variables:
 - group: SNOWFLAKE_CREDENTIALS
+
+# =============================================================================
+# Reusable Templates
+# =============================================================================
+# Configure Snowflake CLI connection (used by all stages)
+# Note: YAML anchors not supported in Azure Pipelines, so steps are repeated
 
 stages:
   # ===========================================================================
   # STAGE 1: Validate
   # ===========================================================================
-  # Runs on every pipeline execution. Validates SQL files exist and tests
-  # the Snowflake connection before attempting any deployments.
+  # Tests Snowflake connection and syncs the Git repository
   - stage: Validate
-    displayName: 'Validate SQL Syntax'
+    displayName: 'Validate Connection'
     jobs:
       - job: Validate
-        displayName: 'Validate SQL Files'
+        displayName: 'Test Snowflake Connection'
         steps:
           - script: |
-              pip3 install --user snowflake-cli jinja2
-            displayName: 'Install Dependencies'
+              pip3 install --user snowflake-cli
+            displayName: 'Install Snowflake CLI'
 
-          # Configure Snowflake CLI with key pair authentication
-          # The private key is base64-decoded to preserve newlines
           - script: |
-              mkdir -p ~/.snowflake
+              mkdir -p ~/.snowflake ~/.snowflake/keys
               cat > ~/.snowflake/connections.toml << EOF
               [cicd]
               account = "$(SNOWFLAKE_ACCOUNT)"
@@ -82,7 +86,6 @@ stages:
               role = "$(SNOWFLAKE_ROLE)"
               EOF
               chmod 0600 ~/.snowflake/connections.toml
-              mkdir -p ~/.snowflake/keys
               echo "$SNOWFLAKE_PRIVATE_KEY" | base64 -d > ~/.snowflake/keys/cicd_rsa.p8
               chmod 0600 ~/.snowflake/keys/cicd_rsa.p8
             displayName: 'Configure Snowflake Connection'
@@ -90,41 +93,32 @@ stages:
               SNOWFLAKE_PRIVATE_KEY: $(SNOWFLAKE_PRIVATE_KEY)
 
           - script: |
-              echo "Validating SQL files..."
-              for file in definitions/*.sql; do
-                echo "Checking: $file"
-                if [ -f "$file" ]; then
-                  echo "  - File exists: OK"
-                fi
-              done
-              echo "Validation complete!"
-            displayName: 'Validate SQL Files Exist'
-
-          # Verify we can connect to Snowflake before proceeding
-          - script: |
               snow sql -q "SELECT CURRENT_ACCOUNT(), CURRENT_USER(), CURRENT_ROLE()" -c cicd
-            displayName: 'Test Snowflake Connection'
+            displayName: 'Test Connection'
+
+          # Sync Snowflake's Git repo clone with Azure DevOps
+          - script: |
+              snow git fetch CICD_DEMO_PROD.PUBLIC.SNOWFLAKE_DEVOPS_REPO -c cicd
+            displayName: 'Sync Git Repository'
 
   # ===========================================================================
   # STAGE 2: Deploy to DEV
   # ===========================================================================
-  # Runs automatically on feature branches (non-main) when RESET_DEV is false.
-  # Deploys all SQL definitions to the CICD_DEMO_DEV database.
+  # Runs on feature branches. Executes SQL with DEV environment variables.
   - stage: Deploy_DEV
     displayName: 'Deploy to DEV'
     dependsOn: Validate
-    # Only run on feature branches (not main) and not during reset
     condition: and(succeeded(), ne(variables['Build.SourceBranch'], 'refs/heads/main'), eq('${{ parameters.RESET_DEV }}', 'false'))
     jobs:
       - job: DeployDev
         displayName: 'Deploy to DEV Environment'
         steps:
           - script: |
-              pip3 install --user snowflake-cli jinja2
-            displayName: 'Install Dependencies'
+              pip3 install --user snowflake-cli
+            displayName: 'Install Snowflake CLI'
 
           - script: |
-              mkdir -p ~/.snowflake
+              mkdir -p ~/.snowflake ~/.snowflake/keys
               cat > ~/.snowflake/connections.toml << EOF
               [cicd]
               account = "$(SNOWFLAKE_ACCOUNT)"
@@ -136,46 +130,43 @@ stages:
               role = "$(SNOWFLAKE_ROLE)"
               EOF
               chmod 0600 ~/.snowflake/connections.toml
-              mkdir -p ~/.snowflake/keys
               echo "$SNOWFLAKE_PRIVATE_KEY" | base64 -d > ~/.snowflake/keys/cicd_rsa.p8
               chmod 0600 ~/.snowflake/keys/cicd_rsa.p8
             displayName: 'Configure Snowflake Connection'
             env:
               SNOWFLAKE_PRIVATE_KEY: $(SNOWFLAKE_PRIVATE_KEY)
 
-          # Run the deployment script targeting DEV environment
+          # Execute SQL files from Git repo with DEV environment variables
           - script: |
-              python3 scripts/render_and_deploy.py DEV -c cicd
+              snow git execute "@CICD_DEMO_PROD.PUBLIC.SNOWFLAKE_DEVOPS_REPO/branches/$(Build.SourceBranchName)/definitions/*" \
+                -D "env='DEV'" \
+                -D "db_suffix='_DEV'" \
+                -D "wh_size='X-SMALL'" \
+                -c cicd
             displayName: 'Deploy to DEV'
 
   # ===========================================================================
   # STAGE 3: Deploy to PROD
   # ===========================================================================
-  # Runs only on pushes to main branch (typically after PR merge).
-  # Uses a deployment job with environment 'production' to enable approval gates.
-  # Requires manual approval before execution (configured in Azure DevOps).
+  # Runs on main branch with approval gate. Executes SQL with PROD variables.
   - stage: Deploy_PROD
     displayName: 'Deploy to Production'
     dependsOn: Validate
-    # Only run on main branch and not during reset
     condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq('${{ parameters.RESET_DEV }}', 'false'))
     jobs:
-      # Using 'deployment' job type enables environment approvals and tracking
       - deployment: DeployProd
         displayName: 'Deploy to PROD'
-        environment: 'production'  # Approval gate configured in Azure DevOps
+        environment: 'production'
         strategy:
           runOnce:
             deploy:
               steps:
-                - checkout: self
+                - script: |
+                    pip3 install --user snowflake-cli
+                  displayName: 'Install Snowflake CLI'
 
                 - script: |
-                    pip3 install --user snowflake-cli jinja2
-                  displayName: 'Install Dependencies'
-
-                - script: |
-                    mkdir -p ~/.snowflake
+                    mkdir -p ~/.snowflake ~/.snowflake/keys
                     cat > ~/.snowflake/connections.toml << EOF
                     [cicd]
                     account = "$(SNOWFLAKE_ACCOUNT)"
@@ -187,16 +178,19 @@ stages:
                     role = "$(SNOWFLAKE_ROLE)"
                     EOF
                     chmod 0600 ~/.snowflake/connections.toml
-                    mkdir -p ~/.snowflake/keys
                     echo "$SNOWFLAKE_PRIVATE_KEY" | base64 -d > ~/.snowflake/keys/cicd_rsa.p8
                     chmod 0600 ~/.snowflake/keys/cicd_rsa.p8
                   displayName: 'Configure Snowflake Connection'
                   env:
                     SNOWFLAKE_PRIVATE_KEY: $(SNOWFLAKE_PRIVATE_KEY)
 
-                # Run the deployment script targeting PROD environment
+                # Execute SQL files from Git repo with PROD environment variables
                 - script: |
-                    python3 scripts/render_and_deploy.py PROD -c cicd
+                    snow git execute "@CICD_DEMO_PROD.PUBLIC.SNOWFLAKE_DEVOPS_REPO/branches/main/definitions/*" \
+                      -D "env='PROD'" \
+                      -D "db_suffix='_PROD'" \
+                      -D "wh_size='SMALL'" \
+                      -c cicd
                   displayName: 'Deploy to PROD'
 
                 - script: |
@@ -210,24 +204,21 @@ stages:
   # ===========================================================================
   # STAGE 4: Reset DEV from PROD
   # ===========================================================================
-  # Manual trigger only - used to reset DEV environment to match PROD.
-  # Uses Snowflake zero-copy cloning for instant, storage-efficient reset.
-  # To trigger: Run pipeline manually and set RESET_DEV = true
+  # Manual trigger only. Clones PROD to DEV using zero-copy cloning.
   - stage: Reset_DEV
     displayName: 'Reset DEV from PROD'
     dependsOn: Validate
-    # Only run when RESET_DEV parameter is set to true
     condition: eq('${{ parameters.RESET_DEV }}', 'true')
     jobs:
       - job: ResetDev
         displayName: 'Clone PROD to DEV'
         steps:
           - script: |
-              pip3 install --user snowflake-cli jinja2
-            displayName: 'Install Dependencies'
+              pip3 install --user snowflake-cli
+            displayName: 'Install Snowflake CLI'
 
           - script: |
-              mkdir -p ~/.snowflake
+              mkdir -p ~/.snowflake ~/.snowflake/keys
               cat > ~/.snowflake/connections.toml << EOF
               [cicd]
               account = "$(SNOWFLAKE_ACCOUNT)"
@@ -239,15 +230,18 @@ stages:
               role = "$(SNOWFLAKE_ROLE)"
               EOF
               chmod 0600 ~/.snowflake/connections.toml
-              mkdir -p ~/.snowflake/keys
               echo "$SNOWFLAKE_PRIVATE_KEY" | base64 -d > ~/.snowflake/keys/cicd_rsa.p8
               chmod 0600 ~/.snowflake/keys/cicd_rsa.p8
             displayName: 'Configure Snowflake Connection'
             env:
               SNOWFLAKE_PRIVATE_KEY: $(SNOWFLAKE_PRIVATE_KEY)
 
-          # Zero-copy clone PROD to DEV, then redeploy to apply any DEV-specific config
+          # Zero-copy clone PROD to DEV, then redeploy DEV-specific config
           - script: |
               snow sql -q "CREATE OR REPLACE DATABASE CICD_DEMO_DEV CLONE CICD_DEMO_PROD" -c cicd
-              python3 scripts/render_and_deploy.py DEV -c cicd
+              snow git execute "@CICD_DEMO_PROD.PUBLIC.SNOWFLAKE_DEVOPS_REPO/branches/main/definitions/*" \
+                -D "env='DEV'" \
+                -D "db_suffix='_DEV'" \
+                -D "wh_size='X-SMALL'" \
+                -c cicd
             displayName: 'Clone PROD to DEV and Redeploy'

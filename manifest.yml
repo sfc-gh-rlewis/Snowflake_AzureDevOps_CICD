@@ -1,9 +1,0 @@
-configurations:
-  DEV:
-    env: "DEV"
-    db_suffix: "_DEV"
-    wh_size: "X-SMALL"
-  PROD:
-    env: "PROD"
-    db_suffix: "_PROD"
-    wh_size: "SMALL"
