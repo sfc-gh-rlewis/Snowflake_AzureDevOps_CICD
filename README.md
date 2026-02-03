@@ -1,177 +1,142 @@
-# Snowflake CI/CD with Azure DevOps Demo
+# Snowflake CI/CD with Azure DevOps
 
-This demo shows how to implement automated CI/CD for Snowflake using:
-- **Jinja Templating** - Environment-specific configurations (DEV/PROD)
-- **Azure DevOps Git Integration** - Native Snowflake connection to Azure repos
-- **Azure Pipelines** - Automated deployment on PR merge
-- **Snow CLI** - Execute SQL from pipeline
-- **Zero Copy Cloning** - Instant test data in DEV from PROD
+Automated deployment pipeline for Snowflake objects using Azure DevOps, featuring environment promotion, approval gates, and zero-copy cloning.
+
+## Overview
+
+This solution enables teams to manage Snowflake infrastructure as code with:
+
+- **Git-based version control** for all database objects
+- **Automated deployments** triggered by code changes
+- **Environment isolation** (DEV/PROD) with Jinja templating
+- **Approval workflows** for production deployments
+- **Zero-copy cloning** for instant environment resets
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         DEVELOPMENT WORKFLOW                            │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│   Snowflake Workspaces ──────► Azure DevOps Repo ──────► Pull Request   │
-│   (Edit SQL files)             (Version control)        (Code review)   │
-│                                                                         │
-├─────────────────────────────────────────────────────────────────────────┤
-│                           CI/CD PIPELINE                                │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│   Validate (analyze) ──────► Plan (preview) ──────► Deploy (on merge)   │
-│                                                                         │
-├─────────────────────────────────────────────────────────────────────────┤
-│                          DATA ENVIRONMENTS                              │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│   CICD_DEMO_PROD ◄──────────── Zero Copy Clone ──────────► CICD_DEMO_DEV│
-│   (Production data)                                        (Test data)  │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              CI/CD WORKFLOW                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   Feature Branch Push ──► Validate ──► Deploy to DEV (automatic)            │
+│                                                                             │
+│   Merge to Main ─────────► Validate ──► Deploy to PROD (with approval)      │
+│                                                                             │
+│   Manual Trigger ────────► Validate ──► Reset DEV from PROD (zero-copy)     │
+│                                                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                           SNOWFLAKE ENVIRONMENTS                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   CICD_DEMO_PROD ◄──────── Zero-Copy Clone ──────────► CICD_DEMO_DEV        │
+│   (Production)                                          (Development)       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Project Structure
 
 ```
-azure_devops_cicd/
+├── azure-pipelines.yml          # CI/CD pipeline definition
 ├── manifest.yml                 # Environment configurations (Jinja variables)
 ├── definitions/
-│   ├── 01_infrastructure.sql   # Database, schemas, warehouse
-│   ├── 02_raw_tables.sql       # Source tables
-│   ├── 03_analytics.sql        # Dynamic tables
-│   ├── 04_serve.sql            # Views for consumption
-│   └── 05_access.sql           # Roles and grants
+│   ├── 01_infrastructure.sql    # Database, schemas, warehouse
+│   ├── 02_raw_tables.sql        # Source tables (CREATE OR ALTER)
+│   ├── 03_analytics.sql         # Dynamic tables
+│   ├── 04_serve.sql             # Views for consumption
+│   └── 05_access.sql            # Roles and grants
 ├── scripts/
-│   └── render_and_deploy.py    # Jinja rendering + SQL execution
-├── azure-pipelines.yml          # CI/CD pipeline definition
-├── setup/
-│   ├── 01_seed_data.sql        # Sample data for demo
-│   └── 02_git_integration.sql  # Git repository setup
-└── README.md
+│   └── render_and_deploy.py     # Jinja rendering + SQL execution
+└── setup/
+    ├── 01_seed_data.sql         # Sample data for demo
+    └── 02_git_integration.sql   # Snowflake Git repository setup
 ```
 
 ## Prerequisites
 
 ### Azure DevOps
-1. Azure DevOps organization and project
-2. Personal Access Token (PAT) with:
-   - Code: Read & Write
-   - Build: Read & Execute
+- Azure DevOps organization and project
+- Self-hosted agent (recommended) or network policy allowing Microsoft-hosted agent IPs
+- Variable group containing `SNOWFLAKE_PRIVATE_KEY` (base64-encoded)
 
 ### Snowflake
-1. ACCOUNTADMIN role (or equivalent privileges)
-2. Snow CLI installed (for local testing)
+- Service user with RSA key pair authentication
+- Appropriate privileges (ACCOUNTADMIN or custom role)
+- Snow CLI available on the build agent
 
 ## Setup Instructions
 
-### Step 1: Clone Repository Locally
+### 1. Create Service User with Key Pair Auth
 
-```bash
-git clone https://reidlewis@dev.azure.com/reidlewis/Snowflake_DevOps_Demo/_git/Snowflake_DevOps_Demo
-cd Snowflake_DevOps_Demo
+```sql
+-- Generate RSA key pair locally first:
+-- openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out cicd_rsa.p8 -nocrypt
+
+-- Create service user
+CREATE USER CICD_SERVICE_USER
+    TYPE = SERVICE
+    DEFAULT_ROLE = ACCOUNTADMIN
+    DEFAULT_WAREHOUSE = COMPUTE_WH;
+
+-- Assign public key (from cicd_rsa.p8.pub)
+ALTER USER CICD_SERVICE_USER SET RSA_PUBLIC_KEY = '<your_public_key>';
 ```
 
-### Step 2: Copy Demo Files
+### 2. Configure Azure DevOps Variable Group
 
-Copy all files from this directory to your cloned repo.
-
-### Step 3: Configure Azure Pipeline Variables
-
-In Azure DevOps, go to Pipelines > Library and create a variable group with:
+In Azure DevOps, go to **Pipelines > Library** and create a variable group named `SNOWFLAKE_CREDENTIALS` with:
 
 | Variable | Value | Secret |
 |----------|-------|--------|
-| SNOWFLAKE_PASSWORD | (service user password) | Yes |
+| SNOWFLAKE_PRIVATE_KEY | Base64-encoded private key | Yes |
+| SNOWFLAKE_ACCOUNT | Your account identifier (e.g., xy12345.us-east-1) | No |
+| SNOWFLAKE_USER | Your service user name | No |
+| SNOWFLAKE_WAREHOUSE | Warehouse to use for deployments | No |
+| SNOWFLAKE_DATABASE | Target database (e.g., CICD_DEMO_PROD) | No |
+| SNOWFLAKE_ROLE | Role for deployments (e.g., ACCOUNTADMIN) | No |
 
-### Step 4: Push to Azure DevOps
-
+To base64-encode your private key:
 ```bash
-git add .
-git commit -m "Initial DCM project setup"
-git push origin main
+cat cicd_rsa.p8 | base64 > cicd_rsa.p8.b64
 ```
 
-### Step 5: Create Pipeline
+### 3. Create the Pipeline
 
-1. Go to Pipelines in Azure DevOps
-2. Create new pipeline
-3. Select Azure Repos Git
-4. Select your repository
-5. Select "Existing Azure Pipelines YAML file"
-6. Select `/azure-pipelines.yml`
-7. Run the pipeline
+1. Push this repository to Azure DevOps
+2. Go to **Pipelines** > **New Pipeline**
+3. Select **Azure Repos Git** and your repository
+4. Select **Existing Azure Pipelines YAML file**
+5. Choose `/azure-pipelines.yml`
+6. Run the pipeline
 
-## Demo Workflow
+### 4. Configure Production Approval (Optional)
 
-### 1. Show Current State (Pain Point)
+1. Go to **Pipelines** > **Environments**
+2. Create or select the `production` environment
+3. Add approval check with required reviewers
 
-Explain how the customer currently:
-- Manually creates objects in prod and non-prod
-- Copies scripts from Azure DevOps
-- Pastes into Snowflake to execute
+## Usage
 
-### 2. Show Zero Copy Clone
-
-```sql
--- Instantly create DEV with all PROD data
-CREATE DATABASE CICD_DEMO_DEV CLONE CICD_DEMO_PROD;
-
--- Verify data is available (no copy time!)
-SELECT COUNT(*) FROM CICD_DEMO_DEV.RAW.ORDERS;
+### Deploy to DEV
+Push changes to any feature branch:
+```bash
+git checkout -b my-feature
+# Make changes to definitions/*.sql
+git add . && git commit -m "Add new column"
+git push origin my-feature
 ```
+Pipeline automatically deploys to DEV.
 
-### 3. Make a Change in Workspaces
+### Deploy to PROD
+Create a pull request and merge to `main`. After approval gate, changes deploy to PROD.
 
-1. Open Snowflake Workspaces
-2. Connect to the Git repository
-3. Edit `definitions/02_raw_tables.sql`
-4. Add a new column to ORDERS table:
+### Reset DEV Environment
+Run the pipeline manually and set **Reset DEV from PROD** = `true`. This performs a zero-copy clone of PROD to DEV.
 
-```sql
--- Add this column to ORDERS table
-PRIORITY VARCHAR(20) DEFAULT 'NORMAL',
-```
+## Environment Configuration
 
-5. Commit and push to a feature branch
-
-### 4. Create Pull Request
-
-1. In Azure DevOps, create PR from feature branch to main
-2. Pipeline automatically runs Validate and Plan stages
-3. Review the plan output - shows exactly what will change
-
-### 5. Merge and Auto-Deploy
-
-1. Approve and merge the PR
-2. Pipeline automatically deploys to PROD
-3. Show the new column in CICD_DEMO_PROD.RAW.ORDERS
-
-### 6. Verify Deployment
-
-```sql
--- Query the updated table
-DESCRIBE TABLE CICD_DEMO_PROD.RAW.ORDERS;
-
--- Check the data
-SELECT * FROM CICD_DEMO_PROD.SERVE.V_CUSTOMER_ORDERS;
-```
-
-## Key Demo Points
-
-1. **Version Control**: All Snowflake objects defined as code in Git
-2. **Environment Parity**: Same definitions deploy to DEV and PROD via Jinja
-3. **Automated Validation**: DCM analyze catches errors before deployment
-4. **Safe Deployments**: Plan shows exactly what will change
-5. **Zero Copy Cloning**: Instant test data without storage costs
-6. **Audit Trail**: Git history + DCM deployment history
-7. **Workspaces Integration**: Developers stay in Snowflake UI
-
-## Jinja Templating Example
-
-The `manifest.yml` defines environment-specific variables:
+The `manifest.yml` controls environment-specific settings:
 
 ```yaml
 configurations:
@@ -185,36 +150,42 @@ configurations:
     wh_size: "SMALL"
 ```
 
-In definitions, use `{{variable}}` syntax:
-
+SQL files use Jinja syntax for templating:
 ```sql
-DEFINE DATABASE CICD_DEMO{{db_suffix}};
-
-DEFINE WAREHOUSE CICD_DEMO_WH_{{env}}
-WITH WAREHOUSE_SIZE = '{{wh_size}}';
+CREATE DATABASE IF NOT EXISTS CICD_DEMO{{db_suffix}};
+CREATE WAREHOUSE IF NOT EXISTS CICD_DEMO_WH_{{env}}
+    WAREHOUSE_SIZE = '{{wh_size}}';
 ```
 
-**Result for DEV**: `CICD_DEMO_DEV`, `CICD_DEMO_WH_DEV` (X-SMALL)
-**Result for PROD**: `CICD_DEMO_PROD`, `CICD_DEMO_WH_PROD` (SMALL)
+## Key Features
+
+| Feature | Benefit |
+|---------|---------|
+| **CREATE OR ALTER** | Declarative schema changes without migrations |
+| **Zero-Copy Clone** | Instant DEV reset with no storage overhead |
+| **Key Pair Auth** | Secure service user authentication (no MFA prompts) |
+| **Path Filters** | Pipeline only triggers on SQL/script changes |
+| **Approval Gates** | Required review before production deployment |
+| **Self-Hosted Agent** | Bypass network policy IP restrictions |
 
 ## Troubleshooting
 
-### Pipeline Fails at Analyze
+### Pipeline can't connect to Snowflake
+- Verify the base64-encoded private key is correct
+- Check that the service user has the public key assigned
+- Ensure network policies allow the agent's IP
 
-Check that:
-- DCM project exists in Snowflake
-- Service user has correct permissions
-- Connection credentials are valid
+### MFA Required Error
+- Service user must use key pair auth, not password
+- Set `TYPE = SERVICE` and remove password from user
 
-### Git Integration Issues
-
-Verify:
-- PAT token has not expired
-- API integration is enabled
-- Repository URL is correct
+### Changes not deploying
+- Check path filters - only `definitions/*` and `scripts/*` trigger the pipeline
+- Verify the correct branch conditions in stage definitions
 
 ## Resources
 
-- [Snowflake DCM Documentation](https://docs.snowflake.com/en/developer-guide/snowflake-cli/dcm/overview)
-- [Snowflake Git Integration](https://docs.snowflake.com/en/developer-guide/git/git-overview)
+- [Snowflake Key Pair Authentication](https://docs.snowflake.com/en/user-guide/key-pair-auth)
+- [Snowflake CREATE OR ALTER](https://docs.snowflake.com/en/sql-reference/sql/create-table#create-or-alter-table)
 - [Azure DevOps Pipelines](https://docs.microsoft.com/en-us/azure/devops/pipelines/)
+- [Zero-Copy Cloning](https://docs.snowflake.com/en/user-guide/object-clone)
