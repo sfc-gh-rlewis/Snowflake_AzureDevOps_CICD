@@ -1,16 +1,49 @@
+# =============================================================================
+# Azure DevOps CI/CD Pipeline for Snowflake
+# =============================================================================
+# This pipeline automates the deployment of Snowflake objects (tables, views,
+# dynamic tables, etc.) across DEV and PROD environments.
+#
+# WORKFLOW:
+#   - Feature branches → Deploy to DEV (automatic)
+#   - Merge to main    → Deploy to PROD (requires approval)
+#   - Manual trigger   → Reset DEV from PROD (zero-copy clone)
+#
+# AUTHENTICATION:
+#   Uses RSA key pair authentication via a service user (CICD_SERVICE_USER).
+#   The private key is stored base64-encoded in the SNOWFLAKE_PRIVATE_KEY
+#   variable group to preserve newlines.
+# =============================================================================
+
+# Trigger on pushes to main branch
 trigger:
   branches:
     include:
       - main
 
+# Trigger on pull requests targeting main branch
 pr:
   branches:
     include:
       - main
 
-pool:
-  name: 'Default'  # Self-hosted agent pool
+# Runtime parameters - these appear as options when manually running the pipeline
+parameters:
+- name: RESET_DEV
+  displayName: 'Reset DEV from PROD?'
+  type: boolean
+  default: false
 
+# Use self-hosted agent to bypass network policy IP restrictions
+# Microsoft-hosted agents have dynamic IPs that can't be allowlisted
+pool:
+  name: 'Default'
+
+# =============================================================================
+# Variables
+# =============================================================================
+# SNOWFLAKE_PRIVATE_KEY is stored in a variable group (base64-encoded)
+# Other connection details are defined inline
 variables:
 - group: SNOWFLAKE_PRIVATE_KEY
 - name: SNOWFLAKE_ACCOUNT
@@ -25,6 +58,11 @@ variables:
   value: 'ACCOUNTADMIN'
 
 stages:
+  # ===========================================================================
+  # STAGE 1: Validate
+  # ===========================================================================
+  # Runs on every pipeline execution. Validates SQL files exist and tests
+  # the Snowflake connection before attempting any deployments.
   - stage: Validate
     displayName: 'Validate SQL Syntax'
     jobs:
@@ -35,6 +73,8 @@ stages:
               pip3 install --user snowflake-cli jinja2
             displayName: 'Install Dependencies'
 
+          # Configure Snowflake CLI with key pair authentication
+          # The private key is base64-decoded to preserve newlines
           - script: |
               mkdir -p ~/.snowflake
               cat > ~/.snowflake/connections.toml << EOF
@@ -66,14 +106,21 @@ stages:
               echo "Validation complete!"
             displayName: 'Validate SQL Files Exist'
 
+          # Verify we can connect to Snowflake before proceeding
           - script: |
               snow sql -q "SELECT CURRENT_ACCOUNT(), CURRENT_USER(), CURRENT_ROLE()" -c cicd
             displayName: 'Test Snowflake Connection'
 
+  # ===========================================================================
+  # STAGE 2: Deploy to DEV
+  # ===========================================================================
+  # Runs automatically on feature branches (non-main) when RESET_DEV is false.
+  # Deploys all SQL definitions to the CICD_DEMO_DEV database.
   - stage: Deploy_DEV
     displayName: 'Deploy to DEV'
     dependsOn: Validate
-    condition: and(succeeded(), ne(variables['Build.SourceBranch'], 'refs/heads/main'), ne(variables['RESET_DEV'], 'true'))
+    # Only run on feature branches (not main) and not during reset
+    condition: and(succeeded(), ne(variables['Build.SourceBranch'], 'refs/heads/main'), eq('${{ parameters.RESET_DEV }}', 'false'))
     jobs:
       - job: DeployDev
         displayName: 'Deploy to DEV Environment'
@@ -102,18 +149,27 @@ stages:
             env:
               SNOWFLAKE_PRIVATE_KEY: $(SNOWFLAKE_PRIVATE_KEY)
 
+          # Run the deployment script targeting DEV environment
           - script: |
               python3 scripts/render_and_deploy.py DEV -c cicd
             displayName: 'Deploy to DEV'
 
+  # ===========================================================================
+  # STAGE 3: Deploy to PROD
+  # ===========================================================================
+  # Runs only on pushes to main branch (typically after PR merge).
+  # Uses a deployment job with environment 'production' to enable approval gates.
+  # Requires manual approval before execution (configured in Azure DevOps).
   - stage: Deploy_PROD
     displayName: 'Deploy to Production'
     dependsOn: Validate
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), ne(variables['RESET_DEV'], 'true'))
+    # Only run on main branch and not during reset
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq('${{ parameters.RESET_DEV }}', 'false'))
     jobs:
+      # Using 'deployment' job type enables environment approvals and tracking
       - deployment: DeployProd
         displayName: 'Deploy to PROD'
-        environment: 'production'
+        environment: 'production'  # Approval gate configured in Azure DevOps
         strategy:
           runOnce:
             deploy:
@@ -144,6 +200,7 @@ stages:
                   env:
                     SNOWFLAKE_PRIVATE_KEY: $(SNOWFLAKE_PRIVATE_KEY)
 
+                # Run the deployment script targeting PROD environment
                 - script: |
                     python3 scripts/render_and_deploy.py PROD -c cicd
                   displayName: 'Deploy to PROD'
@@ -156,10 +213,17 @@ stages:
                     echo "========================================"
                   displayName: 'Deployment Summary'
 
+  # ===========================================================================
+  # STAGE 4: Reset DEV from PROD
+  # ===========================================================================
+  # Manual trigger only - used to reset DEV environment to match PROD.
+  # Uses Snowflake zero-copy cloning for instant, storage-efficient reset.
+  # To trigger: Run pipeline manually and set RESET_DEV = true
   - stage: Reset_DEV
     displayName: 'Reset DEV from PROD'
     dependsOn: Validate
-    condition: eq(variables['RESET_DEV'], 'true')
+    # Only run when RESET_DEV parameter is set to true
+    condition: eq('${{ parameters.RESET_DEV }}', 'true')
     jobs:
       - job: ResetDev
         displayName: 'Clone PROD to DEV'
@@ -188,6 +252,7 @@ stages:
             env:
               SNOWFLAKE_PRIVATE_KEY: $(SNOWFLAKE_PRIVATE_KEY)
 
+          # Zero-copy clone PROD to DEV, then redeploy to apply any DEV-specific config
           - script: |
               snow sql -q "CREATE OR REPLACE DATABASE CICD_DEMO_DEV CLONE CICD_DEMO_PROD" -c cicd
               python3 scripts/render_and_deploy.py DEV -c cicd
