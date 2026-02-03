@@ -12,7 +12,7 @@ pool:
   name: 'Default'  # Self-hosted agent pool
 
 variables:
-- group: SNOWFLAKE_PASSWORD
+- group: SNOWFLAKE_PRIVATE_KEY
 - name: SNOWFLAKE_ACCOUNT
   value: 'SFSENORTHAMERICA-AZ_DEMO_274'
 - name: SNOWFLAKE_USER
@@ -37,19 +37,23 @@ stages:
 
           - script: |
               mkdir -p ~/.snowflake
-              cat > ~/.snowflake/connections.toml << 'EOF'
+              cat > ~/.snowflake/connections.toml << EOF
               [cicd]
               account = "$(SNOWFLAKE_ACCOUNT)"
               user = "$(SNOWFLAKE_USER)"
-              password = "$(SNOWFLAKE_PASSWORD)"
+              authenticator = "SNOWFLAKE_JWT"
+              private_key_path = "~/.snowflake/keys/cicd_rsa.p8"
               warehouse = "$(SNOWFLAKE_WAREHOUSE)"
               database = "$(SNOWFLAKE_DATABASE)"
               role = "$(SNOWFLAKE_ROLE)"
               EOF
               chmod 0600 ~/.snowflake/connections.toml
+              mkdir -p ~/.snowflake/keys
+              echo "$(SNOWFLAKE_PRIVATE_KEY)" > ~/.snowflake/keys/cicd_rsa.p8
+              chmod 0600 ~/.snowflake/keys/cicd_rsa.p8
             displayName: 'Configure Snowflake Connection'
             env:
-              SNOWFLAKE_PASSWORD: $(SNOWFLAKE_PASSWORD)
+              SNOWFLAKE_PRIVATE_KEY: $(SNOWFLAKE_PRIVATE_KEY)
 
           - script: |
               echo "Validating SQL files..."
@@ -80,19 +84,23 @@ stages:
 
           - script: |
               mkdir -p ~/.snowflake
-              cat > ~/.snowflake/connections.toml << 'EOF'
+              cat > ~/.snowflake/connections.toml << EOF
               [cicd]
               account = "$(SNOWFLAKE_ACCOUNT)"
               user = "$(SNOWFLAKE_USER)"
-              password = "$(SNOWFLAKE_PASSWORD)"
+              authenticator = "SNOWFLAKE_JWT"
+              private_key_path = "~/.snowflake/keys/cicd_rsa.p8"
               warehouse = "$(SNOWFLAKE_WAREHOUSE)"
               database = "$(SNOWFLAKE_DATABASE)"
               role = "$(SNOWFLAKE_ROLE)"
               EOF
               chmod 0600 ~/.snowflake/connections.toml
+              mkdir -p ~/.snowflake/keys
+              echo "$(SNOWFLAKE_PRIVATE_KEY)" > ~/.snowflake/keys/cicd_rsa.p8
+              chmod 0600 ~/.snowflake/keys/cicd_rsa.p8
             displayName: 'Configure Snowflake Connection'
             env:
-              SNOWFLAKE_PASSWORD: $(SNOWFLAKE_PASSWORD)
+              SNOWFLAKE_PRIVATE_KEY: $(SNOWFLAKE_PRIVATE_KEY)
 
           - script: |
               python3 scripts/render_and_deploy.py DEV -c cicd
@@ -118,19 +126,23 @@ stages:
 
                 - script: |
                     mkdir -p ~/.snowflake
-                    cat > ~/.snowflake/connections.toml << 'EOF'
+                    cat > ~/.snowflake/connections.toml << EOF
                     [cicd]
                     account = "$(SNOWFLAKE_ACCOUNT)"
                     user = "$(SNOWFLAKE_USER)"
-                    password = "$(SNOWFLAKE_PASSWORD)"
+                    authenticator = "SNOWFLAKE_JWT"
+                    private_key_path = "~/.snowflake/keys/cicd_rsa.p8"
                     warehouse = "$(SNOWFLAKE_WAREHOUSE)"
                     database = "$(SNOWFLAKE_DATABASE)"
                     role = "$(SNOWFLAKE_ROLE)"
                     EOF
                     chmod 0600 ~/.snowflake/connections.toml
+                    mkdir -p ~/.snowflake/keys
+                    echo "$(SNOWFLAKE_PRIVATE_KEY)" > ~/.snowflake/keys/cicd_rsa.p8
+                    chmod 0600 ~/.snowflake/keys/cicd_rsa.p8
                   displayName: 'Configure Snowflake Connection'
                   env:
-                    SNOWFLAKE_PASSWORD: $(SNOWFLAKE_PASSWORD)
+                    SNOWFLAKE_PRIVATE_KEY: $(SNOWFLAKE_PRIVATE_KEY)
 
                 - script: |
                     python3 scripts/render_and_deploy.py PROD -c cicd
