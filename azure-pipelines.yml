@@ -9,7 +9,7 @@ pr:
       - main
 
 pool:
-  vmImage: 'ubuntu-latest'
+  name: 'Default'  # Self-hosted agent pool
 
 variables:
 - group: SNOWFLAKE_PASSWORD
