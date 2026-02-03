@@ -15,11 +15,15 @@
 #   variable group to preserve newlines.
 # =============================================================================
 
-# Trigger on pushes to main branch
+# Trigger on pushes to any branch, but only when SQL definitions or scripts change
 trigger:
   branches:
     include:
-      - main
+      - '*'
+  paths:
+    include:
+      - definitions/*
+      - scripts/*
 
 # Trigger on pull requests targeting main branch
 pr:
